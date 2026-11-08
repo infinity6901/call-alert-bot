@@ -1,0 +1,23 @@
+name: Set up Android build
+description: JDK 17, accepted Android SDK licences (the runner's preinstalled SDK) and Gradle with caching.
+runs:
+  using: composite
+  steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Accept Android SDK licences
+      shell: bash
+      run: |
+        SDKM="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+        if [ -x "$SDKM" ]; then
+          yes | "$SDKM" --licenses > /dev/null || true
+        else
+          echo "sdkmanager not found; relying on the runner's pre-accepted licences"
+        fi
+
+    - name: Set up Gradle (with caching)
+      uses: gradle/actions/setup-gradle@v4

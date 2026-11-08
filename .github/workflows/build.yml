@@ -1,11 +1,24 @@
 name: CI
 
+# verify         Gate 1 : compile, manifest merge + content check, debug APK, APK smoke test, lint
+# device-tests   Gate 2 : instrumented tests, install + cold launch, lifecycle cycles, crash/ANR
+#                         detection, simulated incoming + missed call on an API 34 emulator
+# report         CI report (check by check: PASS / FAIL / NOT RUN) + failure report
+# release        Version tags (v*) only: GitHub release with the APK and the report
+#
+# Every check is wrapped in ci_step (scripts/ci-step.sh): it records PASS/FAIL and keeps going, so one
+# failure never hides the results of the checks after it. The "Enforce" step at the end fails the job.
+#
+# Artifacts (uploaded even when a job fails):
+#   call-alert-bot-debug-apk | build-logs | lint-reports | instrumented-test-reports |
+#   device-logs | ci-report | failure-report
+
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,113 +28,173 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  lint:
-    name: Lint
+  # ------------------------------------------------------------------------------------------------
+  verify:
+    name: "Gate 1: build, lint and APK checks"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      apk_built: ${{ steps.collect.outputs.apk_built }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
+      - uses: ./.github/actions/setup-android-build
 
-      - uses: android-actions/setup-android@v3
+      - name: Make scripts executable
+        run: chmod +x ./gradlew scripts/*.sh
 
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-
-      - name: Android lint
-        id: lint
-        run: bash scripts/run-gradle.sh gradle.log lintDebug --no-daemon --stacktrace
-
-      - name: Summary - why Gradle failed
-        if: steps.lint.outcome == 'failure'
-        run: python3 scripts/ci_summary.py gradle-failure "Lint" gradle.log
-
-      - name: Summary - lint results
-        if: always()
-        run: python3 scripts/ci_summary.py lint app/build/reports/lint-results-debug.xml
-
-      - name: Upload lint report and log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lint-report
-          path: |
-            app/build/reports/lint-results-debug.html
-            gradle.log
-          if-no-files-found: ignore
-
-  build:
-    name: Build and smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - uses: android-actions/setup-android@v3
-
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-
-      - name: Build debug APK
-        id: build
+      - name: Work out the version
+        id: version
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION_NAME="${GITHUB_REF_NAME#v}"
+            echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            VERSION_NAME="dev-${GITHUB_SHA::7}"
+            echo "name=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
-          bash scripts/run-gradle.sh gradle.log assembleDebug --no-daemon --stacktrace \
-            -PversionName="$VERSION_NAME" \
-            -PversionCode="$GITHUB_RUN_NUMBER"
 
-      - name: Summary - why Gradle failed
-        if: steps.build.outcome == 'failure'
-        run: python3 scripts/ci_summary.py gradle-failure "Build" gradle.log
+      - name: Kotlin compilation
+        run: |
+          source scripts/ci-step.sh
+          # --no-build-cache so the compiler really runs and prints its warnings.
+          ci_step compile "Kotlin compilation (debug)" \
+            ./gradlew :app:compileDebugKotlin --warning-mode all --no-build-cache --stacktrace
+          mkdir -p compiler-warnings
+          grep -E '^w: ' ci-logs/compile.log | sort -u > compiler-warnings/compiler-warnings.txt || true
+          touch compiler-warnings/compiler-warnings.txt
+          echo "compiler warnings: $(wc -l < compiler-warnings/compiler-warnings.txt)"
 
-      - name: Smoke test APK
-        run: bash scripts/smoke-test.sh app/build/outputs/apk/debug/app-debug.apk
+      - name: Manifest merge and content check
+        run: |
+          source scripts/ci-step.sh
+          ci_step manifest "Manifest merge (debug)" ./gradlew :app:processDebugManifest --stacktrace
 
-      - name: Upload APK
+          mkdir -p manifests
+          MM=$(find app/build -path '*merged_manifest*' -name AndroidManifest.xml | grep -i debug | head -n1 || true)
+          [ -n "$MM" ] && cp "$MM" manifests/AndroidManifest.merged.xml
+          ci_step manifest-content "Merged manifest declares the call receiver and permissions" python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path = "manifests/AndroidManifest.merged.xml"
+          try:
+              root = ET.parse(path).getroot()
+          except (OSError, ET.ParseError) as error:
+              print("cannot parse the merged manifest:", error)
+              sys.exit(1)
+
+          ns = "{http://schemas.android.com/apk/res/android}name"
+          perms = {u.get(ns) for u in root.iter("uses-permission")}
+          receivers = {r.get(ns): {a.get(ns) for a in r.iter("action")} for r in root.iter("receiver")}
+          print("permissions:", *sorted(p for p in perms if p), sep="\n  ")
+          print("receivers:", *sorted(r for r in receivers if r), sep="\n  ")
+
+          problems = []
+          for needed in ("INTERNET", "READ_PHONE_STATE", "READ_CALL_LOG"):
+              if f"android.permission.{needed}" not in perms:
+                  problems.append(f"missing permission {needed}")
+          call = [n for n in receivers if n and n.endswith("CallReceiver")]
+          if not call:
+              problems.append("CallReceiver is not declared")
+          elif "android.intent.action.PHONE_STATE" not in receivers[call[0]]:
+              problems.append("CallReceiver does not listen for PHONE_STATE")
+          if problems:
+              print("PROBLEMS:", *problems, sep="\n  ")
+              sys.exit(1)
+          PY
+
+      - name: Debug APK
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          source scripts/ci-step.sh
+          ci_step debug-apk "Assemble debug APK" ./gradlew :app:assembleDebug --stacktrace \
+            -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE"
+
+      - name: Collect the APK and smoke test it
+        id: collect
+        run: |
+          source scripts/ci-step.sh
+          mkdir -p out
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          if [ -f "$APK" ]; then
+            cp "$APK" out/call-alert-bot-debug.apk
+            echo "apk_built=true" >> "$GITHUB_OUTPUT"
+            ci_step apk-smoke "APK smoke test: package, permissions, entry points, no embedded token" \
+              bash scripts/smoke-test.sh out/call-alert-bot-debug.apk
+          else
+            echo "apk_built=false" >> "$GITHUB_OUTPUT"
+            ci_record apk-smoke FAIL "Debug APK was not produced"
+          fi
+
+      - name: Android lint
+        run: |
+          source scripts/ci-step.sh
+          ci_step lint "Android lint" ./gradlew :app:lintDebug --stacktrace
+
+      - name: Upload lint reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: app/build/reports/lint-results*
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload build logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ci-logs/
+            ci-status/
+            compiler-warnings/
+            manifests/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload debug APK
+        if: ${{ !cancelled() && steps.collect.outputs.apk_built == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: call-alert-bot-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: out/call-alert-bot-debug.apk
           if-no-files-found: error
+          retention-days: 30
 
-      - name: Upload Gradle log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-gradle-log
-          path: gradle.log
-          if-no-files-found: ignore
+      - name: Enforce Gate 1
+        if: ${{ !cancelled() }}
+        run: |
+          FAIL=0
+          ls ci-status/*.tsv > /dev/null 2>&1 || { echo "::error::No check results were recorded"; exit 1; }
+          for f in ci-status/*.tsv; do
+            IFS=$'\t' read -r id status rc desc < "$f"
+            [ "$status" = "FAIL" ] || continue
+            echo "::error title=Gate 1 failed::$id - $desc"; FAIL=1
+          done
+          exit $FAIL
 
-  emulator-test:
-    name: Emulator tests (API 34)
+  # ------------------------------------------------------------------------------------------------
+  device-tests:
+    name: "Gate 2: emulator checks (API 34)"
+    needs: verify
+    if: ${{ !cancelled() && needs.verify.outputs.apk_built == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
+      - uses: ./.github/actions/setup-android-build
 
-      - uses: android-actions/setup-android@v3
-
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Download debug APK
+        uses: actions/download-artifact@v4
         with:
-          gradle-version: "8.9"
+          name: call-alert-bot-debug-apk
+          path: apks
+
+      - name: Make scripts executable
+        run: chmod +x ./gradlew scripts/*.sh
 
       - name: Enable KVM
         run: |
@@ -129,60 +202,131 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run instrumented tests
-        id: emulator
+      - name: Run emulator checks
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           arch: x86_64
           target: google_apis
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash scripts/run-gradle.sh emulator-gradle.log connectedDebugAndroidTest --no-daemon --stacktrace
+          script: bash scripts/device-tests.sh apks/call-alert-bot-debug.apk device-out 3
 
-      - name: Summary - why Gradle failed
-        if: steps.emulator.outcome == 'failure'
-        run: python3 scripts/ci_summary.py gradle-failure "Emulator tests" emulator-gradle.log
-
-      - name: Summary - test results
-        if: always()
-        run: python3 scripts/ci_summary.py junit app/build/outputs/androidTest-results
-
-      - name: Upload test reports and log
-        if: always()
+      - name: Upload instrumented test reports
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: emulator-test-reports
+          name: instrumented-test-reports
           path: |
             app/build/reports/androidTests/
-            emulator-gradle.log
-          if-no-files-found: ignore
+            app/build/outputs/androidTest-results/
+          if-no-files-found: warn
+          retention-days: 30
 
+      - name: Upload device logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-logs
+          path: |
+            device-out/ci-logs/
+            device-out/ci-status/
+            device-out/*.txt
+            device-out/final-screen.png
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce emulator checks
+        if: ${{ !cancelled() }}
+        run: |
+          FAIL=0
+          for f in device-out/ci-status/*.tsv; do
+            [ -e "$f" ] || { echo "::error::no emulator results were recorded"; exit 1; }
+            IFS=$'\t' read -r id status rc desc < "$f"
+            [ "$status" = "FAIL" ] && { echo "::error title=Emulator check failed::$id - $desc"; FAIL=1; }
+          done
+          exit $FAIL
+
+  # ------------------------------------------------------------------------------------------------
+  report:
+    name: CI report
+    needs: [verify, device-tests]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Build reports
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 scripts/ci_report.py artifacts report-out
+          mkdir -p ci-report failure-report
+          cp report-out/ci-report.md ci-report/
+          cp report-out/failure-report.md failure-report/
+          # Show both on the run's summary page.
+          { cat report-out/ci-report.md; echo; echo '---'; echo; cat report-out/failure-report.md; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CI report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-report
+          path: ci-report/
+          retention-days: 90
+
+      - name: Upload failure report
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-report
+          path: failure-report/
+          retention-days: 90
+
+  # ------------------------------------------------------------------------------------------------
   release:
     name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, build, emulator-test]
+    needs: [verify, device-tests, report]
+    # Version tags only, and only when both gates passed.
+    if: >-
+      ${{ !cancelled()
+          && startsWith(github.ref, 'refs/tags/v')
+          && needs.verify.result == 'success'
+          && needs.device-tests.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download the APK and the CI report
+        uses: actions/download-artifact@v4
         with:
-          name: call-alert-bot-debug-apk
-          path: dist
+          pattern: '{call-alert-bot-debug-apk,ci-report}'
+          merge-multiple: true
+          path: release-files
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
-          ASSET="dist/call-alert-bot-${TAG}.apk"
-          cp dist/app-debug.apk "$ASSET"
+          ASSET="release-files/call-alert-bot-${TAG}.apk"
+          mv release-files/call-alert-bot-debug.apk "$ASSET"
+          {
+            echo "Debug-signed build of **${TAG}** from \`${SHA::7}\`, for sideloading."
+            echo
+            echo "Gate 1 (build, lint, APK checks) and Gate 2 (emulator checks) passed. Details are in the attached \`ci-report.md\`."
+          } > release-notes.md
           FLAGS=()
           if [[ "$TAG" == *-* ]]; then FLAGS+=(--prerelease); fi
-          URL="$(gh release create "$TAG" "$ASSET" \
+          URL="$(gh release create "$TAG" "$ASSET" release-files/ci-report.md \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
+            --notes-file release-notes.md \
             --generate-notes \
             "${FLAGS[@]}")"
           {
@@ -193,39 +337,4 @@ jobs:
             echo "| File | Size | SHA-256 |"
             echo "| --- | --- | --- |"
             echo "| \`$(basename "$ASSET")\` | $(( $(stat -c%s "$ASSET") / 1024 )) KB | \`$(sha256sum "$ASSET" | cut -d' ' -f1)\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  ci-summary:
-    name: Summary
-    if: always()
-    needs: [lint, build, emulator-test, release]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Write overall summary
-        env:
-          LINT: ${{ needs.lint.result }}
-          BUILD: ${{ needs.build.result }}
-          EMULATOR: ${{ needs.emulator-test.result }}
-          RELEASE: ${{ needs.release.result }}
-        run: |
-          icon() {
-            case "$1" in
-              success) echo "✅ passed" ;;
-              failure) echo "❌ failed" ;;
-              cancelled) echo "🚫 cancelled" ;;
-              skipped) echo "⏭️ skipped" ;;
-              *) echo "❔ $1" ;;
-            esac
-          }
-          {
-            echo "## CI result"
-            echo
-            echo "| Job | Result |"
-            echo "| --- | --- |"
-            echo "| Lint | $(icon "$LINT") |"
-            echo "| Build and smoke test | $(icon "$BUILD") |"
-            echo "| Emulator tests | $(icon "$EMULATOR") |"
-            echo "| GitHub release | $(icon "$RELEASE") |"
-            echo
-            echo "Commit \`${GITHUB_SHA::7}\` on \`$GITHUB_REF_NAME\`. Each job's own summary has the details."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -8,41 +8,9 @@ Your bot token and chat ID are typed into the app and stored only on your phone.
 
 **From a release (easiest):** open the repo's **Releases** page and download the `.apk` from the latest release.
 
-**From a CI run:** open the **Actions** tab, pick a finished **CI** run, and download the **call-alert-bot-debug-apk** artifact (a zip containing `app-debug.apk`).
+**From a CI run:** open the **Actions** tab, pick a finished **CI** run, and download the **call-alert-bot-debug-apk** artifact (a zip containing `call-alert-bot-debug.apk`).
 
 Then copy the APK to your phone and install it. Android will ask you to allow installs from your browser or file manager.
-
-## CI
-
-The **CI** workflow (`.github/workflows/build.yml`) runs on every push to `main`, on pull requests, and on version tags. You can also start it by hand from the Actions tab.
-
-| Job | What it does |
-| --- | --- |
-| **Lint** | Runs `gradle lintDebug`; fails on lint errors and uploads the HTML report. |
-| **Build and smoke test** | Builds the debug APK, then `scripts/smoke-test.sh` checks the package name, launcher activity, permissions, call receiver, and that no bot token is embedded. |
-| **Emulator tests** | Boots an API 34 emulator and runs the instrumented tests in `app/src/androidTest` (main screen, saving the config, receiver guard). |
-| **Publish GitHub release** | Only on `v*` tags, and only if the three jobs above passed. Attaches the APK to a new GitHub release with generated notes. |
-
-### Reading a run
-
-Open a CI run and its **Summary** page shows an overview table, plus a summary for each job:
-
-- **Lint:** error and warning counts with the issues listed (file, line, message).
-- **Build and smoke test:** a pass/fail row per smoke check, and the APK's version, size and SHA-256.
-- **Emulator tests:** a row per test with its result and time, and the failure message for any test that failed.
-- **Any failed Gradle step:** the "What went wrong" section and compiler errors from the Gradle log, so you don't have to dig through the raw log.
-- **Release:** the release link and the APK's checksum.
-
-The full Gradle logs, the lint HTML report and the emulator test reports are attached to the run as artifacts.
-
-### Publishing a release
-
-```
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The tag name becomes the app's version name (`1.0.0`) and the CI run number becomes the version code. A tag with a dash, such as `v1.1.0-rc1`, is published as a pre-release. The release APK is signed with the debug key, which is fine for sideloading onto your own phone.
 
 ## Set up Telegram
 
@@ -66,18 +34,46 @@ Open the app at least once after installing. Android does not deliver call event
 - `📞 Incoming call from Name (+91...)` when the phone starts ringing
 - `❌ Missed call from Name (+91...)` when it stops ringing without being answered (this also covers calls you reject)
 
+## CI
+
+The **CI** workflow (`.github/workflows/build.yml`) runs on every push to `main`, on pull requests, and on version tags. You can also start it by hand from the Actions tab. It uses the Gradle wrapper and the runner's preinstalled Android SDK.
+
+Every check runs through `scripts/ci-step.sh`, which records PASS or FAIL and keeps going, so one failing check never hides the results of the ones after it. A final step in each job then fails the job if anything failed.
+
+| Job | What it does |
+| --- | --- |
+| **Gate 1: build, lint and APK checks** | Kotlin compilation, manifest merge plus a check that the merged manifest declares the call receiver and permissions, debug APK build, APK smoke test (`scripts/smoke-test.sh`: package, permissions, entry points, and no bot token compiled in), and Android lint. |
+| **Gate 2: emulator checks** | On an API 34 emulator: the instrumented tests, install of the APK Gate 1 built, cold launch, background/foreground, rotation, screen off/on and force-stop/relaunch cycles, crash and ANR detection from logcat, then a simulated incoming call and missed call (`adb emu gsm`). The test bot config is fake, so Telegram rejects the message; what's checked is that the receiver ran end to end. |
+| **CI report** | Builds a check-by-check report and a failure report from everything above. |
+| **Publish GitHub release** | Only on `v*` tags, and only if both gates passed. Attaches the APK and the report to a new release. |
+
+### Reading a run
+
+Open a CI run and its **Summary** page shows the CI report (gates, every check as PASS / FAIL / NOT RUN, lint issues, test results) followed by the failure report (the key Gradle errors and the last lines of the log for each failed check, plus details of any failing test).
+
+A check is only PASS if CI actually ran it and it passed. Anything that did not run shows as NOT RUN.
+
+The run also keeps these artifacts: `call-alert-bot-debug-apk`, `build-logs` (a log per check), `lint-reports`, `instrumented-test-reports`, `device-logs` (logcat, crash log, final screenshot), `ci-report` and `failure-report`.
+
+### Publishing a release
+
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The tag name becomes the app's version name (`1.0.0`) and the CI run number becomes the version code. A tag with a dash, such as `v1.1.0-rc1`, is published as a pre-release. The release APK is signed with the debug key, which is fine for sideloading onto your own phone.
+
 ## Build locally
 
-Needs JDK 17, the Android SDK and Gradle 8.9:
+Needs JDK 17 and the Android SDK:
 
 ```
-gradle lintDebug
-gradle assembleDebug
+./gradlew lintDebug
+./gradlew assembleDebug
 bash scripts/smoke-test.sh app/build/outputs/apk/debug/app-debug.apk
-gradle connectedDebugAndroidTest   # needs an emulator or a connected phone
+./gradlew connectedDebugAndroidTest   # needs an emulator or a connected phone
 ```
-
-To add the Gradle wrapper, run `gradle wrapper --gradle-version 8.9` once and commit the generated files.
 
 ## Notes
 

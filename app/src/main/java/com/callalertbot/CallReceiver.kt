@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.ContactsContract
+import android.util.Log
 import android.telephony.TelephonyManager
 import kotlin.concurrent.thread
 
@@ -69,7 +70,14 @@ class CallReceiver : BroadcastReceiver() {
         val pending = goAsync()
         thread {
             try {
-                Telegram.send(token, chatId, text)
+                // Logged without the number or the token; CI's emulator test looks for this line.
+                Log.i(TAG, "Dispatching alert")
+                val error = Telegram.send(token, chatId, text)
+                if (error == null) {
+                    Log.i(TAG, "Alert sent")
+                } else {
+                    Log.w(TAG, "Alert failed: ${error.take(120)}")
+                }
             } finally {
                 pending.finish()
             }
@@ -99,5 +107,6 @@ class CallReceiver : BroadcastReceiver() {
 
     private companion object {
         const val RING_WINDOW_MS = 2 * 60 * 1000L
+        const val TAG = "CallAlertBot"
     }
 }

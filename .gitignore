@@ -10,3 +10,19 @@ captures/
 *.keystore
 *.jks
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Output of the CI scripts when run locally
+ci-logs/
+ci-status/
+compiler-warnings/
+manifests/
+out/
+apks/
+device-out/
+report-out/
+ci-report/
+failure-report/
