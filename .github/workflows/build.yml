@@ -33,14 +33,25 @@ jobs:
           gradle-version: "8.9"
 
       - name: Android lint
-        run: gradle lintDebug --no-daemon --stacktrace
+        id: lint
+        run: bash scripts/run-gradle.sh gradle.log lintDebug --no-daemon --stacktrace
 
-      - name: Upload lint report
+      - name: Summary - why Gradle failed
+        if: steps.lint.outcome == 'failure'
+        run: python3 scripts/ci_summary.py gradle-failure "Lint" gradle.log
+
+      - name: Summary - lint results
+        if: always()
+        run: python3 scripts/ci_summary.py lint app/build/reports/lint-results-debug.xml
+
+      - name: Upload lint report and log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: lint-report
-          path: app/build/reports/lint-results-debug.html
+          path: |
+            app/build/reports/lint-results-debug.html
+            gradle.log
           if-no-files-found: ignore
 
   build:
@@ -61,15 +72,20 @@ jobs:
           gradle-version: "8.9"
 
       - name: Build debug APK
+        id: build
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION_NAME="${GITHUB_REF_NAME#v}"
           else
             VERSION_NAME="dev-${GITHUB_SHA::7}"
           fi
-          gradle assembleDebug --no-daemon --stacktrace \
+          bash scripts/run-gradle.sh gradle.log assembleDebug --no-daemon --stacktrace \
             -PversionName="$VERSION_NAME" \
             -PversionCode="$GITHUB_RUN_NUMBER"
+
+      - name: Summary - why Gradle failed
+        if: steps.build.outcome == 'failure'
+        run: python3 scripts/ci_summary.py gradle-failure "Build" gradle.log
 
       - name: Smoke test APK
         run: bash scripts/smoke-test.sh app/build/outputs/apk/debug/app-debug.apk
@@ -80,6 +96,14 @@ jobs:
           name: call-alert-bot-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Upload Gradle log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-gradle-log
+          path: gradle.log
+          if-no-files-found: ignore
 
   emulator-test:
     name: Emulator tests (API 34)
@@ -106,6 +130,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Run instrumented tests
+        id: emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -113,14 +138,24 @@ jobs:
           target: google_apis
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: gradle connectedDebugAndroidTest --no-daemon --stacktrace
+          script: bash scripts/run-gradle.sh emulator-gradle.log connectedDebugAndroidTest --no-daemon --stacktrace
 
-      - name: Upload test reports
+      - name: Summary - why Gradle failed
+        if: steps.emulator.outcome == 'failure'
+        run: python3 scripts/ci_summary.py gradle-failure "Emulator tests" emulator-gradle.log
+
+      - name: Summary - test results
+        if: always()
+        run: python3 scripts/ci_summary.py junit app/build/outputs/androidTest-results
+
+      - name: Upload test reports and log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: emulator-test-reports
-          path: app/build/reports/androidTests/
+          path: |
+            app/build/reports/androidTests/
+            emulator-gradle.log
           if-no-files-found: ignore
 
   release:
@@ -145,8 +180,52 @@ jobs:
           cp dist/app-debug.apk "$ASSET"
           FLAGS=()
           if [[ "$TAG" == *-* ]]; then FLAGS+=(--prerelease); fi
-          gh release create "$TAG" "$ASSET" \
+          URL="$(gh release create "$TAG" "$ASSET" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
             --generate-notes \
-            "${FLAGS[@]}"
+            "${FLAGS[@]}")"
+          {
+            echo "### 🚀 Released $TAG"
+            echo
+            echo "$URL"
+            echo
+            echo "| File | Size | SHA-256 |"
+            echo "| --- | --- | --- |"
+            echo "| \`$(basename "$ASSET")\` | $(( $(stat -c%s "$ASSET") / 1024 )) KB | \`$(sha256sum "$ASSET" | cut -d' ' -f1)\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ci-summary:
+    name: Summary
+    if: always()
+    needs: [lint, build, emulator-test, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write overall summary
+        env:
+          LINT: ${{ needs.lint.result }}
+          BUILD: ${{ needs.build.result }}
+          EMULATOR: ${{ needs.emulator-test.result }}
+          RELEASE: ${{ needs.release.result }}
+        run: |
+          icon() {
+            case "$1" in
+              success) echo "✅ passed" ;;
+              failure) echo "❌ failed" ;;
+              cancelled) echo "🚫 cancelled" ;;
+              skipped) echo "⏭️ skipped" ;;
+              *) echo "❔ $1" ;;
+            esac
+          }
+          {
+            echo "## CI result"
+            echo
+            echo "| Job | Result |"
+            echo "| --- | --- |"
+            echo "| Lint | $(icon "$LINT") |"
+            echo "| Build and smoke test | $(icon "$BUILD") |"
+            echo "| Emulator tests | $(icon "$EMULATOR") |"
+            echo "| GitHub release | $(icon "$RELEASE") |"
+            echo
+            echo "Commit \`${GITHUB_SHA::7}\` on \`$GITHUB_REF_NAME\`. Each job's own summary has the details."
+          } >> "$GITHUB_STEP_SUMMARY"

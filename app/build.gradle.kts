@@ -38,7 +38,7 @@ android {
         warningsAsErrors = false
         checkReleaseBuilds = false
         htmlReport = true
-        xmlReport = false
+        xmlReport = true
     }
 }
 

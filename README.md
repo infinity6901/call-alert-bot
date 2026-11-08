@@ -23,6 +23,18 @@ The **CI** workflow (`.github/workflows/build.yml`) runs on every push to `main`
 | **Emulator tests** | Boots an API 34 emulator and runs the instrumented tests in `app/src/androidTest` (main screen, saving the config, receiver guard). |
 | **Publish GitHub release** | Only on `v*` tags, and only if the three jobs above passed. Attaches the APK to a new GitHub release with generated notes. |
 
+### Reading a run
+
+Open a CI run and its **Summary** page shows an overview table, plus a summary for each job:
+
+- **Lint:** error and warning counts with the issues listed (file, line, message).
+- **Build and smoke test:** a pass/fail row per smoke check, and the APK's version, size and SHA-256.
+- **Emulator tests:** a row per test with its result and time, and the failure message for any test that failed.
+- **Any failed Gradle step:** the "What went wrong" section and compiler errors from the Gradle log, so you don't have to dig through the raw log.
+- **Release:** the release link and the APK's checksum.
+
+The full Gradle logs, the lint HTML report and the emulator test reports are attached to the run as artifacts.
+
 ### Publishing a release
 
 ```
