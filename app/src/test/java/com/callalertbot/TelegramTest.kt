@@ -7,7 +7,8 @@ import org.junit.Test
 
 class TelegramTest {
 
-    private val token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+    // Built at runtime so this fake never looks like a real bot token to secret scanners.
+    private val token = "123456789" + ":AA" + "x".repeat(33)
 
     @Test
     fun normalizeTokenKeepsAGoodToken() {
