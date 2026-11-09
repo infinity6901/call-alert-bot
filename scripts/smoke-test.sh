@@ -31,6 +31,7 @@ check() { # description, file, fixed string that must be present
 
 check "package name is com.callalertbot" "$badging" "package: name='com.callalertbot'"
 check "launcher activity is MainActivity" "$badging" "launchable-activity: name='com.callalertbot.MainActivity'"
+check "app icon is declared" "$badging" "application-icon"
 for perm in INTERNET READ_PHONE_STATE READ_CALL_LOG READ_CONTACTS; do
   check "permission $perm" "$badging" "uses-permission: name='android.permission.$perm'"
 done

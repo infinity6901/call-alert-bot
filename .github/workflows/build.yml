@@ -1,6 +1,6 @@
 name: CI
 
-# verify         Gate 1 : compile, manifest merge + content check, debug APK, APK smoke test, lint
+# verify         Gate 1 : compile, unit tests, manifest merge + content check, debug APK, APK smoke test, lint
 # device-tests   Gate 2 : instrumented tests, install + cold launch, lifecycle cycles, crash/ANR
 #                         detection, simulated incoming + missed call on an API 34 emulator
 # report         CI report (check by check: PASS / FAIL / NOT RUN) + failure report
@@ -62,6 +62,12 @@ jobs:
           grep -E '^w: ' ci-logs/compile.log | sort -u > compiler-warnings/compiler-warnings.txt || true
           touch compiler-warnings/compiler-warnings.txt
           echo "compiler warnings: $(wc -l < compiler-warnings/compiler-warnings.txt)"
+
+      - name: Unit tests
+        run: |
+          source scripts/ci-step.sh
+          ci_step unit-tests "Unit tests (formatting, token handling, error messages)" \
+            ./gradlew :app:testDebugUnitTest --stacktrace
 
       - name: Manifest merge and content check
         run: |
@@ -151,6 +157,7 @@ jobs:
             ci-status/
             compiler-warnings/
             manifests/
+            app/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
           retention-days: 30
 

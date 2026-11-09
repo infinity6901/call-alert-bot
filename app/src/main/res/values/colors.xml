@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="cab_primary">#1565C0</color>
+    <color name="cab_on_primary">#FFFFFF</color>
+    <color name="cab_primary_container">#D6E4FF</color>
+    <color name="cab_on_primary_container">#001B3E</color>
+    <color name="cab_secondary_container">#DCE2F9</color>
+    <color name="cab_on_secondary_container">#141B2C</color>
+    <color name="cab_surface">#FAF9FD</color>
+    <color name="cab_on_surface">#1B1B1F</color>
+    <color name="cab_surface_variant">#E1E2EC</color>
+    <color name="cab_on_surface_variant">#44474F</color>
+    <color name="cab_outline">#74777F</color>
+    <color name="cab_outline_variant">#C4C6D0</color>
+    <color name="cab_error">#BA1A1A</color>
+    <color name="cab_on_error">#FFFFFF</color>
+    <color name="cab_card">#EEF0F6</color>
+
+    <color name="cab_ok_bg">#D7F0DD</color>
+    <color name="cab_ok_fg">#0B3D1A</color>
+    <color name="cab_warn_bg">#FFE8B8</color>
+    <color name="cab_warn_fg">#4A3300</color>
+    <color name="cab_paused_bg">#E1E2EC</color>
+    <color name="cab_paused_fg">#1B1B1F</color>
+
+    <color name="cab_ok_text">#1B7F3B</color>
+    <color name="cab_warn_text">#9A6700</color>
+    <color name="cab_error_text">#BA1A1A</color>
+    <color name="cab_neutral_text">#5B5E66</color>
+</resources>

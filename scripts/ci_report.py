@@ -58,6 +58,7 @@ job_results = json.loads(E("JOB_RESULTS", "{}") or "{}")
 # ----------------------------------------------------------------------------- what is checked
 GATE1 = [
     ("compile", "Kotlin compilation"),
+    ("unit-tests", "Unit tests"),
     ("manifest", "Manifest merge"),
     ("manifest-content", "Merged manifest declares the call receiver and permissions"),
     ("debug-apk", "Debug APK build"),
@@ -157,9 +158,9 @@ else:
         L.append(f"\n...and {len(issues) - 40} more. The full HTML report is in the **lint-reports** artifact.")
     L.append("")
 
-L += ["## Instrumented tests", ""]
+L += ["## Tests", ""]
 if not tests:
-    L += ["No test results were found (the emulator job did not get as far as running them).", ""]
+    L += ["No test results were found (the build stopped before the tests ran).", ""]
 else:
     failed = sum(t["status"] == "FAIL" for t in tests)
     skipped = sum(t["status"] == "SKIPPED" for t in tests)

@@ -31,8 +31,13 @@ Open the app at least once after installing. Android does not deliver call event
 
 ## What you get
 
-- `📞 Incoming call from Name (+91...)` when the phone starts ringing
-- `❌ Missed call from Name (+91...)` when it stops ringing without being answered (this also covers calls you reject)
+- `📞 Incoming call from Name (+91...) · 10:07 AM` when the phone starts ringing
+- `❌ Missed call from Name (+91...) · 10:07 AM` when it stops ringing without being answered (this also covers calls you reject)
+- `✅ Call with Name (+91...) ended · 2m 14s · 10:09 AM` when a call ends (off by default; also covers outgoing calls)
+
+Everything can be switched on or off in the app: each kind of alert, contact names, "unknown callers only" (skips numbers saved in your contacts), silent delivery, and a master switch to pause alerts. The app also keeps a short list of recent alerts so you can see whether each one reached Telegram.
+
+Setup helpers: **Find my chat ID** looks it up for you after you message the bot, **Save & test** checks the token and sends a test message, and you can paste the token with spaces or even the whole `api.telegram.org/bot...` link and the app extracts it.
 
 ## CI
 
@@ -42,7 +47,7 @@ Every check runs through `scripts/ci-step.sh`, which records PASS or FAIL and ke
 
 | Job | What it does |
 | --- | --- |
-| **Gate 1: build, lint and APK checks** | Kotlin compilation, manifest merge plus a check that the merged manifest declares the call receiver and permissions, debug APK build, APK smoke test (`scripts/smoke-test.sh`: package, permissions, entry points, and no bot token compiled in), and Android lint. |
+| **Gate 1: build, lint and APK checks** | Kotlin compilation, unit tests, manifest merge plus a check that the merged manifest declares the call receiver and permissions, debug APK build, APK smoke test (`scripts/smoke-test.sh`: package, icon, permissions, entry points, and no bot token compiled in), and Android lint. |
 | **Gate 2: emulator checks** | On an API 34 emulator: the instrumented tests, install of the APK Gate 1 built, cold launch, background/foreground, rotation, screen off/on and force-stop/relaunch cycles, crash and ANR detection from logcat, then a simulated incoming call and missed call (`adb emu gsm`). The test bot config is fake, so Telegram rejects the message; what's checked is that the receiver ran end to end. |
 | **CI report** | Builds a check-by-check report and a failure report from everything above. |
 | **Publish GitHub release** | Only on `v*` tags, and only if both gates passed. Attaches the APK and the report to a new release. |
@@ -69,11 +74,16 @@ The tag name becomes the app's version name (`1.0.0`) and the CI run number beco
 Needs JDK 17 and the Android SDK:
 
 ```
+./gradlew testDebugUnitTest
 ./gradlew lintDebug
 ./gradlew assembleDebug
 bash scripts/smoke-test.sh app/build/outputs/apk/debug/app-debug.apk
 ./gradlew connectedDebugAndroidTest   # needs an emulator or a connected phone
 ```
+
+## Icon
+
+The launcher icon is an adaptive vector icon (a ringing phone handset on a blue gradient). It includes a single-colour layer, so Android 13+ can tint it to match your wallpaper when themed icons are on. The files are in `app/src/main/res/drawable/ic_launcher_*.xml`. The handset is the Material Design "call" glyph (Apache 2.0).
 
 ## Notes
 

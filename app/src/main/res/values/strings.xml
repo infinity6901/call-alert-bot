@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Call Alert Bot</string>
+    <string name="header_subtitle">Telegram alerts for your calls</string>
+
+    <string name="status_active_title">Alerts are on</string>
+    <string name="status_active_body">You\'ll get a Telegram message when calls come in or are missed.</string>
+    <string name="status_paused_title">Alerts are paused</string>
+    <string name="status_paused_body">Turn the switch back on to resume.</string>
+    <string name="status_setup_title">Setup needed</string>
+    <string name="status_need_telegram">Add your bot token and chat ID below.</string>
+    <string name="status_need_permissions">Grant the phone and call log permissions below.</string>
+
+    <string name="section_telegram">Telegram bot</string>
+    <string name="telegram_help">Create a bot with @BotFather and paste its token. Then send the bot any message and tap Find my chat ID.</string>
+    <string name="hint_token">Bot token</string>
+    <string name="hint_chat">Chat ID</string>
+    <string name="find_chat">Find my chat ID</string>
+    <string name="save_test">Save &amp; test</string>
+    <string name="checking">Checking…</string>
+    <string name="error_need_token">Paste your bot token first.</string>
+    <string name="error_need_chat">Enter your chat ID, or send your bot a message and tap Find my chat ID.</string>
+    <string name="test_success">Connected to @%1$s. A test message is on its way.</string>
+    <string name="chat_found">Found chat \"%1$s\". Tap Save &amp; test to confirm.</string>
+    <string name="test_message">✅ Call Alert Bot is connected. You\'ll get a message here when someone calls.</string>
+    <string name="test_log">Test message</string>
+
+    <string name="section_permissions">Permissions &amp; reliability</string>
+    <string name="perm_calls">Phone &amp; call log (required to see who is calling)</string>
+    <string name="perm_contacts">Contacts (optional, shows names instead of numbers)</string>
+    <string name="perm_battery">Battery set to unrestricted (keeps alerts reliable)</string>
+    <string name="grant_permissions">Grant permissions</string>
+    <string name="battery_settings">Battery settings</string>
+
+    <string name="section_alerts">Alerts</string>
+    <string name="opt_incoming">Incoming calls</string>
+    <string name="opt_incoming_desc">A message when the phone starts ringing</string>
+    <string name="opt_missed">Missed calls</string>
+    <string name="opt_missed_desc">A message when a call isn\'t answered</string>
+    <string name="opt_ended">Call summaries</string>
+    <string name="opt_ended_desc">A message when a call ends, with how long it lasted</string>
+    <string name="opt_names">Show contact names</string>
+    <string name="opt_names_desc">Needs the Contacts permission</string>
+    <string name="opt_unknown">Unknown callers only</string>
+    <string name="opt_unknown_desc">Skip alerts for numbers saved in your contacts. Needs the Contacts permission.</string>
+    <string name="opt_silent">Silent messages</string>
+    <string name="opt_silent_desc">Telegram delivers them without a notification sound</string>
+
+    <string name="section_activity">Recent activity</string>
+    <string name="activity_empty">Nothing yet. Alerts and test messages will show up here.</string>
+    <string name="clear">Clear</string>
+    <string name="activity_sent">Sent</string>
+    <string name="activity_failed">Not sent</string>
+</resources>
