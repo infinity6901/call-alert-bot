@@ -103,6 +103,56 @@ class AppSmokeTest {
         assertFalse(Config.isOn(context, Config.Option.ENDED))
         assertFalse(Config.isOn(context, Config.Option.UNKNOWN_ONLY))
         assertFalse(Config.isOn(context, Config.Option.SILENT))
+        // Every new feature is opt-in.
+        assertFalse(Config.isOn(context, Config.Option.QUIET))
+        assertFalse(Config.isOn(context, Config.Option.QUIET_SKIP))
+        assertFalse(Config.isOn(context, Config.Option.COMMANDS))
+        assertFalse(Config.isOn(context, Config.Option.SUMMARY))
+        assertFalse(Config.isOn(context, Config.Option.SMS))
+    }
+
+    @Test
+    fun muteCommandSetsAndClearsTheMute() {
+        val handler = CommandHandler(context)
+        assertFalse(Config.isMuted(context))
+
+        val reply = handler.handle("/mute 2h")
+        assertTrue(reply!!.contains("Muted"))
+        assertTrue(Config.isMuted(context))
+
+        handler.handle("/unmute")
+        assertFalse(Config.isMuted(context))
+    }
+
+    @Test
+    fun badMuteDurationIsRejected() {
+        val reply = CommandHandler(context).handle("/mute banana")
+        assertTrue(reply!!.contains("/mute 30m"))
+        assertFalse(Config.isMuted(context))
+    }
+
+    @Test
+    fun pauseAndResumeCommandsFlipTheMasterSwitch() {
+        val handler = CommandHandler(context)
+        handler.handle("/pause")
+        assertFalse(Config.isOn(context, Config.Option.ENABLED))
+        handler.handle("/resume")
+        assertTrue(Config.isOn(context, Config.Option.ENABLED))
+    }
+
+    @Test
+    fun plainTextAndUnknownCommandsGetTheRightAnswer() {
+        val handler = CommandHandler(context)
+        assertEquals(null, handler.handle("hello there"))
+        assertTrue(handler.handle("/nope")!!.contains("/help"))
+        assertTrue(handler.handle("/help")!!.contains("/mute"))
+    }
+
+    @Test
+    fun smsReceiverDoesNothingWhenForwardingIsOff() {
+        Config.save(context, testToken, "123456789")
+        SmsReceiver().onReceive(context, Intent("android.provider.Telephony.SMS_RECEIVED"))
+        assertTrue(ActivityLog.entries(context).isEmpty())
     }
 
     @Test

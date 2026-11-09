@@ -18,9 +18,24 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // The release key comes from the environment, so it never lives in the repo. CI sets these from
+    // GitHub secrets for tagged releases; without them, a release build is simply left unsigned.
+    signingConfigs {
+        val keystorePath = System.getenv("CAB_KEYSTORE_FILE")
+        if (!keystorePath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("CAB_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("CAB_KEY_ALIAS")
+                keyPassword = System.getenv("CAB_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
@@ -55,6 +70,8 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
 
     testImplementation("junit:junit:4.13.2")
+    // Android's own org.json is only a stub in JVM unit tests; this is the real one.
+    testImplementation("org.json:json:20240303")
 
     androidTestImplementation("androidx.test:core:1.6.1")
     androidTestImplementation("androidx.test:runner:1.6.2")

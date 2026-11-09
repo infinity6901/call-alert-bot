@@ -32,11 +32,15 @@ check() { # description, file, fixed string that must be present
 check "package name is com.callalertbot" "$badging" "package: name='com.callalertbot'"
 check "launcher activity is MainActivity" "$badging" "launchable-activity: name='com.callalertbot.MainActivity'"
 check "app icon is declared" "$badging" "application-icon"
-for perm in INTERNET READ_PHONE_STATE READ_CALL_LOG READ_CONTACTS; do
+for perm in INTERNET READ_PHONE_STATE READ_CALL_LOG READ_CONTACTS RECEIVE_SMS FOREGROUND_SERVICE POST_NOTIFICATIONS RECEIVE_BOOT_COMPLETED; do
   check "permission $perm" "$badging" "uses-permission: name='android.permission.$perm'"
 done
 check "call receiver declared" "$manifest" "com.callalertbot.CallReceiver"
 check "receiver listens for PHONE_STATE" "$manifest" "android.intent.action.PHONE_STATE"
+check "SMS receiver declared" "$manifest" "com.callalertbot.SmsReceiver"
+check "boot receiver declared" "$manifest" "com.callalertbot.BootReceiver"
+check "summary receiver declared" "$manifest" "com.callalertbot.SummaryReceiver"
+check "command service declared" "$manifest" "com.callalertbot.CommandService"
 
 # Bot tokens look like 123456789:AAxxxxxxxx... and must live on the phone, never in the APK.
 hits="$(unzip -p "$APK" 'classes*.dex' | grep -acE '[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}' || true)"

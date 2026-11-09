@@ -51,4 +51,35 @@
     <string name="clear">Clear</string>
     <string name="activity_sent">Sent</string>
     <string name="activity_failed">Not sent</string>
+
+    <string name="status_muted_title">Alerts are muted</string>
+    <string name="status_muted_body">Muted until %1$s. Send /unmute to your bot to turn them back on.</string>
+
+    <string name="perm_sms">Text messages (needed to forward them)</string>
+    <string name="perm_notifications">Notifications (shows the listener notice)</string>
+
+    <string name="section_quiet">Quiet hours &amp; VIPs</string>
+    <string name="opt_quiet">Quiet hours</string>
+    <string name="opt_quiet_desc">Alerts arrive silently during these hours</string>
+    <string name="opt_quiet_skip">Skip alerts in quiet hours</string>
+    <string name="opt_quiet_skip_desc">Send nothing at all, instead of sending silently</string>
+    <string name="quiet_from">From %1$s</string>
+    <string name="quiet_to">To %1$s</string>
+    <string name="hint_vip">VIP numbers</string>
+    <string name="vip_help">These always alert with sound, even in quiet hours or when muted. One number per line.</string>
+
+    <string name="section_extras">Extras</string>
+    <string name="opt_commands">Telegram commands</string>
+    <string name="opt_commands_desc">Send /help to your bot to mute, pause or look up calls. Runs a small background service with a notice.</string>
+    <string name="opt_summary">Daily summary</string>
+    <string name="opt_summary_desc">One message each day with your call totals and missed calls</string>
+    <string name="summary_time">Send at %1$s</string>
+    <string name="opt_sms">Forward text messages</string>
+    <string name="opt_sms_desc">Sends texts, including one-time passwords, to your Telegram chat. Anyone who can read that chat can read them.</string>
+
+    <string name="notice_channel">Command listener</string>
+    <string name="notice_title">Listening for Telegram commands</string>
+    <string name="notice_text">Send /help to your bot</string>
+
+    <string name="activity_skipped">Skipped (%1$s)</string>
 </resources>

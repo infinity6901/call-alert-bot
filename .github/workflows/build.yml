@@ -4,13 +4,14 @@ name: CI
 # device-tests   Gate 2 : instrumented tests, install + cold launch, lifecycle cycles, crash/ANR
 #                         detection, simulated incoming + missed call on an API 34 emulator
 # report         CI report (check by check: PASS / FAIL / NOT RUN) + failure report
+# build-release  Version tags (v*) only: signed release APK (needs the signing secrets, see README)
 # release        Version tags (v*) only: GitHub release with the APK and the report
 #
 # Every check is wrapped in ci_step (scripts/ci-step.sh): it records PASS/FAIL and keeps going, so one
 # failure never hides the results of the checks after it. The "Enforce" step at the end fails the job.
 #
 # Artifacts (uploaded even when a job fails):
-#   call-alert-bot-debug-apk | build-logs | lint-reports | instrumented-test-reports |
+#   call-alert-bot-debug-apk | call-alert-bot-release-apk | build-logs | lint-reports | instrumented-test-reports |
 #   device-logs | ci-report | failure-report
 
 on:
@@ -94,15 +95,30 @@ jobs:
           print("permissions:", *sorted(p for p in perms if p), sep="\n  ")
           print("receivers:", *sorted(r for r in receivers if r), sep="\n  ")
 
+          services = {s.get(ns) for s in root.iter("service")}
+          print("services:", *sorted(x for x in services if x), sep="\n  ")
+
           problems = []
-          for needed in ("INTERNET", "READ_PHONE_STATE", "READ_CALL_LOG"):
+          for needed in ("INTERNET", "READ_PHONE_STATE", "READ_CALL_LOG", "READ_CONTACTS", "RECEIVE_SMS",
+                         "FOREGROUND_SERVICE", "FOREGROUND_SERVICE_SPECIAL_USE", "POST_NOTIFICATIONS",
+                         "RECEIVE_BOOT_COMPLETED"):
               if f"android.permission.{needed}" not in perms:
                   problems.append(f"missing permission {needed}")
-          call = [n for n in receivers if n and n.endswith("CallReceiver")]
-          if not call:
-              problems.append("CallReceiver is not declared")
-          elif "android.intent.action.PHONE_STATE" not in receivers[call[0]]:
-              problems.append("CallReceiver does not listen for PHONE_STATE")
+
+          def listens(suffix, action):
+              found = [n for n in receivers if n and n.endswith(suffix)]
+              if not found:
+                  problems.append(f"{suffix} is not declared")
+              elif action not in receivers[found[0]]:
+                  problems.append(f"{suffix} does not listen for {action}")
+
+          listens("CallReceiver", "android.intent.action.PHONE_STATE")
+          listens("SmsReceiver", "android.provider.Telephony.SMS_RECEIVED")
+          listens("BootReceiver", "android.intent.action.BOOT_COMPLETED")
+          if not any(n and n.endswith("SummaryReceiver") for n in receivers):
+              problems.append("SummaryReceiver is not declared")
+          if not any(n and n.endswith("CommandService") for n in services):
+              problems.append("CommandService is not declared")
           if problems:
               print("PROBLEMS:", *problems, sep="\n  ")
               sys.exit(1)
@@ -294,9 +310,9 @@ jobs:
           retention-days: 90
 
   # ------------------------------------------------------------------------------------------------
-  release:
-    name: Publish GitHub release
-    needs: [verify, device-tests, report]
+  build-release:
+    name: Build signed release APK
+    needs: [verify, device-tests]
     # Version tags only, and only when both gates passed.
     if: >-
       ${{ !cancelled()
@@ -304,15 +320,100 @@ jobs:
           && needs.verify.result == 'success'
           && needs.device-tests.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-android-build
+
+      - name: Make scripts executable
+        run: chmod +x ./gradlew scripts/*.sh
+
+      # Needs four repository secrets (see README, "Signed releases"). Without them this job still passes,
+      # and the release falls back to the debug-signed APK.
+      - name: Build, check and verify the signed APK
+        id: sign
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          CAB_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          CAB_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          CAB_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Unsigned release::No signing key is configured, so the release uses the debug-signed APK."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          export CAB_KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+
+          ./gradlew :app:assembleRelease --stacktrace \
+            -PversionName="${GITHUB_REF_NAME#v}" -PversionCode="$GITHUB_RUN_NUMBER"
+
+          APK=app/build/outputs/apk/release/app-release.apk
+          bash scripts/smoke-test.sh "$APK"
+
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee apksigner.txt
+          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" apksigner.txt
+
+          mkdir -p release-out
+          cp "$APK" release-out/call-alert-bot-release.apk
+          rm -f "$RUNNER_TEMP/release.keystore"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "### 🔏 Signed release APK"
+            echo
+            echo '```'
+            grep -E "Signer #1 certificate (DN|SHA-256)" apksigner.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload signed APK
+        if: ${{ steps.sign.outputs.signed == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: call-alert-bot-release-apk
+          path: release-out/call-alert-bot-release.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # ------------------------------------------------------------------------------------------------
+  release:
+    name: Publish GitHub release
+    needs: [verify, device-tests, build-release, report]
+    # Version tags only, and only when both gates and the release build passed.
+    if: >-
+      ${{ !cancelled()
+          && startsWith(github.ref, 'refs/tags/v')
+          && needs.verify.result == 'success'
+          && needs.device-tests.result == 'success'
+          && needs.build-release.result == 'success' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - name: Download the APK and the CI report
+      - name: Download the signed APK
+        if: ${{ needs.build-release.outputs.signed == 'true' }}
         uses: actions/download-artifact@v4
         with:
-          pattern: '{call-alert-bot-debug-apk,ci-report}'
-          merge-multiple: true
+          name: call-alert-bot-release-apk
+          path: release-files
+
+      - name: Download the debug APK (no signing key configured)
+        if: ${{ needs.build-release.outputs.signed != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: call-alert-bot-debug-apk
+          path: release-files
+
+      - name: Download the CI report
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-report
           path: release-files
 
       - name: Create release
@@ -320,13 +421,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
+          SIGNED: ${{ needs.build-release.outputs.signed }}
         run: |
           ASSET="release-files/call-alert-bot-${TAG}.apk"
-          mv release-files/call-alert-bot-debug.apk "$ASSET"
+          if [ "$SIGNED" = "true" ]; then
+            mv release-files/call-alert-bot-release.apk "$ASSET"
+            KIND="Release-signed build"
+          else
+            mv release-files/call-alert-bot-debug.apk "$ASSET"
+            KIND="Debug-signed build"
+          fi
           {
-            echo "Debug-signed build of **${TAG}** from \`${SHA::7}\`, for sideloading."
+            echo "$KIND of **${TAG}** from \`${SHA::7}\`, for sideloading."
             echo
             echo "Gate 1 (build, lint, APK checks) and Gate 2 (emulator checks) passed. Details are in the attached \`ci-report.md\`."
+            if [ "$SIGNED" = "true" ]; then
+              echo
+              echo "Signed with the project's release key. It can't be installed over a debug build; uninstall that first."
+            fi
           } > release-notes.md
           FLAGS=()
           if [[ "$TAG" == *-* ]]; then FLAGS+=(--prerelease); fi
@@ -337,7 +449,7 @@ jobs:
             --generate-notes \
             "${FLAGS[@]}")"
           {
-            echo "### 🚀 Released $TAG"
+            echo "### 🚀 Released $TAG ($KIND)"
             echo
             echo "$URL"
             echo

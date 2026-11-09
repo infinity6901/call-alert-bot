@@ -1,17 +1,21 @@
 package com.callalertbot
 
 import android.Manifest
+import android.app.TimePickerDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.format.DateFormat
 import android.text.format.DateUtils
 import android.view.View
+import android.view.ViewGroup
 import android.widget.CompoundButton
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -38,16 +42,12 @@ class MainActivity : AppCompatActivity() {
 
         b.tokenInput.setText(Config.token(this))
         b.chatInput.setText(Config.chatId(this))
+        b.vipInput.setText(Config.vipText(this))
 
         bindSwitch(b.switchEnabled, Config.Option.ENABLED)
-        for (spec in OPTION_ROWS) {
-            val item = ItemOptionBinding.inflate(layoutInflater, b.optionsList, false)
-            item.optionTitle.setText(spec.title)
-            item.optionDesc.setText(spec.desc)
-            bindSwitch(item.optionSwitch, spec.option)
-            item.root.setOnClickListener { item.optionSwitch.toggle() }
-            b.optionsList.addView(item.root)
-        }
+        addOptions(b.optionsList, ALERT_ROWS)
+        addOptions(b.quietOptionsList, QUIET_ROWS)
+        addOptions(b.extrasOptionsList, EXTRA_ROWS)
 
         b.buttonSaveTest.setOnClickListener { saveAndTest() }
         b.buttonFindChat.setOnClickListener { findChatId() }
@@ -57,12 +57,26 @@ class MainActivity : AppCompatActivity() {
             ActivityLog.clear(this)
             renderActivity()
         }
+        b.buttonQuietStart.setOnClickListener {
+            pickTime(Config.quietStart(this)) { Config.setQuietStart(this, it) }
+        }
+        b.buttonQuietEnd.setOnClickListener {
+            pickTime(Config.quietEnd(this)) { Config.setQuietEnd(this, it) }
+        }
+        b.buttonSummaryTime.setOnClickListener {
+            pickTime(Config.summaryAt(this)) {
+                Config.setSummaryAt(this, it)
+                Features.apply(this)
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
         refresh()
         renderActivity()
+        // Makes sure the background parts match the settings (for example after an app update).
+        Features.apply(this)
         ActivityLog.prefs(this).registerOnSharedPreferenceChangeListener(activityListener)
     }
 
@@ -79,22 +93,60 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------------------------ settings
 
+    private fun addOptions(container: ViewGroup, rows: List<OptionRow>) {
+        for (spec in rows) {
+            val item = ItemOptionBinding.inflate(layoutInflater, container, false)
+            item.optionTitle.setText(spec.title)
+            item.optionDesc.setText(spec.desc)
+            bindSwitch(item.optionSwitch, spec.option)
+            item.root.setOnClickListener { item.optionSwitch.toggle() }
+            container.addView(item.root)
+        }
+    }
+
     private fun bindSwitch(view: CompoundButton, option: Config.Option) {
         view.isChecked = Config.isOn(this, option)
         view.setOnCheckedChangeListener { _, on ->
             Config.set(this, option, on)
+            onOptionChanged(option, on)
             refresh()
         }
     }
 
-    /** Saves what is typed in the two fields, tidying up the token on the way. */
+    private fun onOptionChanged(option: Config.Option, on: Boolean) {
+        when (option) {
+            Config.Option.SMS, Config.Option.COMMANDS -> {
+                if (on) askForPermissions()
+                Features.apply(this)
+            }
+            Config.Option.SUMMARY -> Features.apply(this)
+            else -> Unit
+        }
+    }
+
+    /** Saves what is typed in the fields, tidying up the token on the way. */
     private fun saveFields() {
         val token = Telegram.normalizeToken(b.tokenInput.text?.toString().orEmpty())
         val chat = b.chatInput.text?.toString().orEmpty().trim()
-        if (token != Config.token(this) || chat != Config.chatId(this)) {
-            Config.save(this, token, chat)
-        }
+        val changed = token != Config.token(this) || chat != Config.chatId(this)
+        if (changed) Config.save(this, token, chat)
         if (b.tokenInput.text?.toString() != token) b.tokenInput.setText(token)
+
+        val vip = b.vipInput.text?.toString().orEmpty().trim()
+        if (vip != Config.vipText(this)) Config.setVipText(this, vip)
+
+        if (changed) Features.apply(this)
+    }
+
+    private fun pickTime(currentMinutes: Int, onPicked: (Int) -> Unit) {
+        TimePickerDialog(
+            this,
+            { _, hour, minute ->
+                onPicked(hour * 60 + minute)
+                refresh()
+            },
+            currentMinutes / 60, currentMinutes % 60, DateFormat.is24HourFormat(this)
+        ).show()
     }
 
     // ------------------------------------------------------------------------------------ Telegram
@@ -186,22 +238,31 @@ class MainActivity : AppCompatActivity() {
         val callsOk = granted(Manifest.permission.READ_PHONE_STATE) && granted(Manifest.permission.READ_CALL_LOG)
         val contactsOk = granted(Manifest.permission.READ_CONTACTS)
         val batteryOk = ignoringBatteryOptimizations()
+        val smsOn = Config.isOn(this, Config.Option.SMS)
+        val smsOk = granted(Manifest.permission.RECEIVE_SMS)
+        val notificationsNeeded = Build.VERSION.SDK_INT >= 33 && Config.isOn(this, Config.Option.COMMANDS)
+        val notificationsOk = Build.VERSION.SDK_INT < 33 || granted(Manifest.permission.POST_NOTIFICATIONS)
 
         when {
             !Config.isOn(this, Config.Option.ENABLED) -> showStatus(
-                R.drawable.ic_pause_circle, R.string.status_paused_title, R.string.status_paused_body,
+                R.drawable.ic_pause_circle, getString(R.string.status_paused_title), getString(R.string.status_paused_body),
                 R.color.cab_paused_bg, R.color.cab_paused_fg
             )
             !Config.isConfigured(this) -> showStatus(
-                R.drawable.ic_warning, R.string.status_setup_title, R.string.status_need_telegram,
+                R.drawable.ic_warning, getString(R.string.status_setup_title), getString(R.string.status_need_telegram),
                 R.color.cab_warn_bg, R.color.cab_warn_fg
             )
-            !callsOk -> showStatus(
-                R.drawable.ic_warning, R.string.status_setup_title, R.string.status_need_permissions,
+            !callsOk || (smsOn && !smsOk) -> showStatus(
+                R.drawable.ic_warning, getString(R.string.status_setup_title), getString(R.string.status_need_permissions),
                 R.color.cab_warn_bg, R.color.cab_warn_fg
+            )
+            Config.isMuted(this) -> showStatus(
+                R.drawable.ic_pause_circle, getString(R.string.status_muted_title),
+                getString(R.string.status_muted_body, TimeText.dateTime(this, Config.mutedUntil(this))),
+                R.color.cab_paused_bg, R.color.cab_paused_fg
             )
             else -> showStatus(
-                R.drawable.ic_check_circle, R.string.status_active_title, R.string.status_active_body,
+                R.drawable.ic_check_circle, getString(R.string.status_active_title), getString(R.string.status_active_body),
                 R.color.cab_ok_bg, R.color.cab_ok_fg
             )
         }
@@ -209,18 +270,27 @@ class MainActivity : AppCompatActivity() {
         showRow(b.rowCalls, callsOk, required = true)
         showRow(b.rowContacts, contactsOk, required = false)
         showRow(b.rowBattery, batteryOk, required = false)
-        b.buttonGrant.visibility = if (callsOk && contactsOk) View.GONE else View.VISIBLE
+        b.rowSms.visibility = if (smsOn) View.VISIBLE else View.GONE
+        if (smsOn) showRow(b.rowSms, smsOk, required = true)
+        b.rowNotifications.visibility = if (notificationsNeeded) View.VISIBLE else View.GONE
+        if (notificationsNeeded) showRow(b.rowNotifications, notificationsOk, required = false)
+
+        b.buttonGrant.visibility = if (wantedPermissions().all { granted(it) }) View.GONE else View.VISIBLE
         b.buttonBattery.visibility = if (batteryOk) View.GONE else View.VISIBLE
+
+        b.buttonQuietStart.text = getString(R.string.quiet_from, TimeText.minutes(this, Config.quietStart(this)))
+        b.buttonQuietEnd.text = getString(R.string.quiet_to, TimeText.minutes(this, Config.quietEnd(this)))
+        b.buttonSummaryTime.text = getString(R.string.summary_time, TimeText.minutes(this, Config.summaryAt(this)))
     }
 
-    private fun showStatus(icon: Int, title: Int, body: Int, background: Int, foreground: Int) {
+    private fun showStatus(icon: Int, title: String, body: String, background: Int, foreground: Int) {
         val fg = getColor(foreground)
         b.statusCard.setCardBackgroundColor(getColor(background))
         b.statusIcon.setImageResource(icon)
         b.statusIcon.imageTintList = ColorStateList.valueOf(fg)
-        b.statusTitle.setText(title)
+        b.statusTitle.text = title
         b.statusTitle.setTextColor(fg)
-        b.statusSubtitle.setText(body)
+        b.statusSubtitle.text = body
         b.statusSubtitle.setTextColor(fg)
     }
 
@@ -244,8 +314,22 @@ class MainActivity : AppCompatActivity() {
     private fun granted(permission: String) =
         checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
+    /** The three basic permissions, plus the ones the extras you switched on need. */
+    private fun wantedPermissions(): List<String> {
+        val wanted = mutableListOf(
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.READ_CALL_LOG,
+            Manifest.permission.READ_CONTACTS
+        )
+        if (Config.isOn(this, Config.Option.SMS)) wanted += Manifest.permission.RECEIVE_SMS
+        if (Build.VERSION.SDK_INT >= 33 && Config.isOn(this, Config.Option.COMMANDS)) {
+            wanted += Manifest.permission.POST_NOTIFICATIONS
+        }
+        return wanted
+    }
+
     private fun askForPermissions() {
-        val missing = PERMISSIONS.filter { !granted(it) }
+        val missing = wantedPermissions().filter { !granted(it) }
         if (missing.isEmpty()) return
 
         val ui = getSharedPreferences("ui", MODE_PRIVATE)
@@ -290,15 +374,30 @@ class MainActivity : AppCompatActivity() {
             val whenText = DateUtils.getRelativeDateTimeString(
                 this, entry.time, DateUtils.MINUTE_IN_MILLIS, DateUtils.WEEK_IN_MILLIS, 0
             )
-            val outcome = if (entry.ok) {
-                getString(R.string.activity_sent)
-            } else {
-                getString(R.string.activity_failed) + if (entry.detail.isNotBlank()) ": ${entry.detail.take(90)}" else ""
+            val skipped = entry.detail.startsWith(ActivityLog.SKIPPED)
+            val outcome = when {
+                skipped -> getString(R.string.activity_skipped, entry.detail.removePrefix(ActivityLog.SKIPPED))
+                entry.ok -> getString(R.string.activity_sent)
+                else -> getString(R.string.activity_failed) +
+                    if (entry.detail.isNotBlank()) ": ${entry.detail.take(90)}" else ""
             }
             row.entryMeta.text = "$whenText · $outcome"
-            row.entryIcon.setImageResource(if (entry.ok) R.drawable.ic_check_circle else R.drawable.ic_cancel)
-            row.entryIcon.imageTintList =
-                ColorStateList.valueOf(getColor(if (entry.ok) R.color.cab_ok_text else R.color.cab_error_text))
+            row.entryIcon.setImageResource(
+                when {
+                    skipped -> R.drawable.ic_pause_circle
+                    entry.ok -> R.drawable.ic_check_circle
+                    else -> R.drawable.ic_cancel
+                }
+            )
+            row.entryIcon.imageTintList = ColorStateList.valueOf(
+                getColor(
+                    when {
+                        skipped -> R.color.cab_neutral_text
+                        entry.ok -> R.color.cab_ok_text
+                        else -> R.color.cab_error_text
+                    }
+                )
+            )
             b.activityList.addView(row.root)
         }
     }
@@ -307,19 +406,24 @@ class MainActivity : AppCompatActivity() {
         const val REQUEST_PERMISSIONS = 1
         const val MAX_SHOWN = 15
 
-        val PERMISSIONS = listOf(
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.READ_CALL_LOG,
-            Manifest.permission.READ_CONTACTS
-        )
-
-        val OPTION_ROWS = listOf(
+        val ALERT_ROWS = listOf(
             OptionRow(Config.Option.INCOMING, R.string.opt_incoming, R.string.opt_incoming_desc),
             OptionRow(Config.Option.MISSED, R.string.opt_missed, R.string.opt_missed_desc),
             OptionRow(Config.Option.ENDED, R.string.opt_ended, R.string.opt_ended_desc),
             OptionRow(Config.Option.NAMES, R.string.opt_names, R.string.opt_names_desc),
             OptionRow(Config.Option.UNKNOWN_ONLY, R.string.opt_unknown, R.string.opt_unknown_desc),
             OptionRow(Config.Option.SILENT, R.string.opt_silent, R.string.opt_silent_desc)
+        )
+
+        val QUIET_ROWS = listOf(
+            OptionRow(Config.Option.QUIET, R.string.opt_quiet, R.string.opt_quiet_desc),
+            OptionRow(Config.Option.QUIET_SKIP, R.string.opt_quiet_skip, R.string.opt_quiet_skip_desc)
+        )
+
+        val EXTRA_ROWS = listOf(
+            OptionRow(Config.Option.COMMANDS, R.string.opt_commands, R.string.opt_commands_desc),
+            OptionRow(Config.Option.SUMMARY, R.string.opt_summary, R.string.opt_summary_desc),
+            OptionRow(Config.Option.SMS, R.string.opt_sms, R.string.opt_sms_desc)
         )
     }
 }

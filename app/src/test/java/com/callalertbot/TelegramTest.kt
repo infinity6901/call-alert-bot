@@ -41,6 +41,26 @@ class TelegramTest {
     }
 
     @Test
+    fun parseUpdatesReadsMessagesAndKeepsOtherUpdatesForTheOffset() {
+        val body = """{"ok":true,"result":[
+            {"update_id":10,"message":{"message_id":1,"chat":{"id":555,"first_name":"A"},"text":"/status"}},
+            {"update_id":11,"edited_message":{"message_id":2,"chat":{"id":555},"text":"x"}},
+            {"update_id":12,"message":{"message_id":3,"chat":{"id":-100777},"text":"hello"}}
+        ]}"""
+        val updates = Telegram.parseUpdates(body)
+        assertEquals(listOf(10L, 11L, 12L), updates.map { it.id })
+        assertEquals(Telegram.Update(10, "555", "/status"), updates[0])
+        assertEquals(Telegram.Update(11, "", ""), updates[1])
+        assertEquals("-100777", updates[2].chatId)
+    }
+
+    @Test
+    fun parseUpdatesToleratesGarbage() {
+        assertTrue(Telegram.parseUpdates("not json").isEmpty())
+        assertTrue(Telegram.parseUpdates("""{"ok":true}""").isEmpty())
+    }
+
+    @Test
     fun friendlyExplainsTheCommonFailures() {
         assertTrue(Telegram.friendly(Telegram.Result(false, "Unauthorized", 401)).contains("bot token"))
         assertTrue(Telegram.friendly(Telegram.Result(false, "Bad Request: chat not found", 400)).contains("Find my chat ID"))

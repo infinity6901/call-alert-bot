@@ -9,6 +9,9 @@ import org.json.JSONObject
 object ActivityLog {
     data class Entry(val time: Long, val kind: String, val text: String, val ok: Boolean, val detail: String)
 
+    /** Entries whose detail starts with this were deliberately not sent (muted, quiet hours). */
+    const val SKIPPED = "skipped: "
+
     private const val FILE = "activity"
     private const val KEY = "entries"
     private const val MAX = 30

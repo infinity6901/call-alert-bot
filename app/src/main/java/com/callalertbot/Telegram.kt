@@ -32,6 +32,38 @@ object Telegram {
         return tokenPattern.find(text)?.value ?: text.filterNot { it.isWhitespace() }
     }
 
+    /** One incoming update. [chatId] and [text] are empty for updates that aren't plain messages. */
+    data class Update(val id: Long, val chatId: String, val text: String)
+
+    /**
+     * Waits up to [timeoutSeconds] for new updates after [offset] (long polling).
+     * The Result's body can be read with [parseUpdates].
+     */
+    fun getUpdates(token: String, offset: Long, timeoutSeconds: Int): Result =
+        call(
+            token, "getUpdates",
+            mapOf("offset" to offset.toString(), "timeout" to timeoutSeconds.toString(), "allowed_updates" to "[\"message\"]"),
+            readTimeoutMs = (timeoutSeconds + 10) * 1000
+        )
+
+    fun parseUpdates(body: String): List<Update> {
+        return try {
+            val array = JSONObject(body).getJSONArray("result")
+            (0 until array.length()).map { index ->
+                val update = array.getJSONObject(index)
+                val message = update.optJSONObject("message")
+                val chat = message?.optJSONObject("chat")
+                Update(
+                    update.getLong("update_id"),
+                    if (chat != null && chat.has("id")) chat.getLong("id").toString() else "",
+                    message?.optString("text").orEmpty()
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     /** Sends a message, trying a second time when the failure looks temporary. */
     fun sendMessage(token: String, chatId: String, text: String, silent: Boolean = false): Result {
         var result = Result(false, "not attempted")
@@ -102,14 +134,19 @@ object Telegram {
 
     private fun retryable(result: Result) = result.code == 0 || result.code == 429 || result.code >= 500
 
-    private fun call(token: String, method: String, params: Map<String, String>): Result {
+    private fun call(
+        token: String,
+        method: String,
+        params: Map<String, String>,
+        readTimeoutMs: Int = 5_000
+    ): Result {
         return try {
             val form = params.entries.joinToString("&") { "${enc(it.key)}=${enc(it.value)}" }
             val conn = URL("https://api.telegram.org/bot$token/$method").openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = "POST"
                 conn.connectTimeout = 4_000
-                conn.readTimeout = 5_000
+                conn.readTimeout = readTimeoutMs
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
                 conn.outputStream.use { it.write(form.toByteArray(Charsets.UTF_8)) }
