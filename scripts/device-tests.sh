@@ -98,10 +98,19 @@ check_phase process-restart "Force-stop then relaunch: app restarts cleanly"
 # CallReceiver logs "Dispatching alert" (no numbers, no token) every time it sends a message.
 alerts() { adb logcat -d -s CallAlertBot:I | grep -c "Dispatching alert" || true; }
 
+# The broadcast can take a while on a cold emulator, so poll instead of sleeping a fixed time.
+wait_for_alerts() {  # wait_for_alerts <count> <seconds>
+  local end=$((SECONDS + $2))
+  while [ $SECONDS -lt "$end" ]; do
+    [ "$(alerts)" -ge "$1" ] && return 0
+    sleep 2
+  done
+  [ "$(alerts)" -ge "$1" ]
+}
+
 adb logcat -c
 adb emu gsm call 5551234567 >/dev/null 2>&1
-sleep 12
-if [ "$(alerts)" -ge 1 ]; then
+if wait_for_alerts 1 60; then
   ci_record incoming-call-alert PASS "Simulated incoming call: the receiver dispatched an alert"
 else
   ci_record incoming-call-alert FAIL "Simulated incoming call: no alert was dispatched (see call-alert-logcat.txt)"
@@ -109,8 +118,7 @@ else
 fi
 
 adb emu gsm cancel 5551234567 >/dev/null 2>&1
-sleep 10
-if [ "$(alerts)" -ge 2 ]; then
+if wait_for_alerts 2 60; then
   ci_record missed-call-alert PASS "Simulated missed call: the receiver dispatched a second alert"
 else
   ci_record missed-call-alert FAIL "Simulated missed call: no second alert was dispatched (see call-alert-logcat.txt)"
